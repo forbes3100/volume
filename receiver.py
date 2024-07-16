@@ -1,4 +1,7 @@
-# Volume-Knob-Encoder Bluetooth Receiver for Pico W Board
+"""Volume-Knob-Encoder Bluetooth Receiver for Pico W Board"""
+
+__copyright__ = "Copyright 2024, Scott Forbes"
+__license__ = "GPL"
 
 import bluetooth
 import time
