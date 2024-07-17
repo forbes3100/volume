@@ -19,22 +19,18 @@ def sender():
     ble = bluetooth.BLE()
     p = ble_simple_peripheral.BLESimplePeripheral(ble)
 
-    last_state1 = pin1.value()
-    last_state2 = pin1.value()
+    last_state = 4
 
     while True:
-        current_state1 = pin1.value()
-        current_state2 = pin2.value()
+        state = (pin1.value() << 1) | pin2.value()
 
         if p.is_connected():
             # send volume knob state out Bluetooth whenever it changes
-            if current_state1 != last_state1 or current_state2 != last_state2:
+            if state != last_state:
                 # print for debug
-                print(f"State: {current_state1}{current_state2}")
-                state = (current_state1 << 1) | current_state2
+                print(f"{state=:02b}")
                 p.send(bytes([state]))
-                last_state1 = current_state1
-                last_state2 = current_state2
+                last_state = state
         time.sleep_ms(10)
 
 if __name__ == "__main__":
