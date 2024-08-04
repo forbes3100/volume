@@ -15,46 +15,42 @@ GPIO_PIN2 = 13
 pin1 = Pin(GPIO_PIN1, Pin.OUT)   # encoder data A to amp
 pin2 = Pin(GPIO_PIN2, Pin.OUT)   # encoder data B to amp
 
+def on_scan(addr_type, addr, name, found, central):
+    if addr_type is not None:
+        found[0] = True
+        addr_hex = hex(int.from_bytes(addr, 'big'))
+        print("Found peripheral:", addr_type, addr_hex, name)
+        central.connect()
+
+def on_rx(v, pin1, pin2):
+    # received a state change over Bluetooth
+    state = v[0]
+    # print for debug
+    print(f"RX {state:02b}")
+    # update volume knob state going to amp
+    pin1.value(state & 0x01)
+    pin2.value((state >> 1) & 0x01)
+
 def receiver():
     ble = bluetooth.BLE()
     central = ble_simple_central.BLESimpleCentral(ble)
+    found = [False]  # Use a list to maintain mutable state
 
-    not_found = False
+    while True:
+        central.scan(lambda at, ad, n: on_scan(at, ad, n, found, central))
 
-    def on_scan(addr_type, addr, name):
-        if addr_type is not None:
-            print("Found peripheral:", addr_type, addr, name)
-            central.connect()
-        else:
-            nonlocal not_found
-            not_found = True
-            print("No peripheral found.")
+        # wait for connection...
+        while not (central.is_connected() and found[0]):
+            time.sleep_ms(100)
 
-    central.scan(callback=on_scan)
+        print("Connected")
+        central.on_notify(lambda v: on_rx(v, pin1, pin2))
 
-    # wait for connection...
-    while not central.is_connected():
-        time.sleep_ms(100)
-        if not_found:
-            return
+        while central.is_connected():
+            time.sleep_ms(400)
 
-    print("Connected")
-
-    def on_rx(v):
-        # received a state change over Bluetooth
-        state = v[0]
-        # print for debug
-        print(f"RX {state:02b}")
-        # update volume knob state going to amp
-        pin1.value(state & 0x01)
-        pin2.value((state >> 1) & 0x01)
-
-    central.on_notify(on_rx)
-
-    while central.is_connected():
-        time.sleep_ms(400)
-
-    print("Disconnected")
+        print("Disconnected")
+        found[0] = False  # Reset found status
 
 if __name__ == "__main__":
     receiver()
