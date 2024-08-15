@@ -3,11 +3,16 @@
 __copyright__ = "Copyright 2024, Scott Forbes"
 __license__ = "GPL"
 
-from machine import Pin
+# Based on micropython/tree/master/examples/bluetooth/ble_simple_peripheral.py
+
 import bluetooth
+import random
+import struct
 import rp2
 import time
-import ble_simple_peripheral
+from ble_advertising import advertising_payload
+from machine import Pin
+from micropython import const
 
 GPIO_PIN1 = 11
 GPIO_PIN2 = 13
@@ -15,6 +20,79 @@ GPIO_PIN2 = 13
 # set up GPIO pins
 pin1 = Pin(GPIO_PIN1, Pin.IN)   # encoder data A from knob
 pin2 = Pin(GPIO_PIN2, Pin.IN)   # encoder data B from knob
+
+
+_IRQ_CENTRAL_CONNECT = const(1)
+_IRQ_CENTRAL_DISCONNECT = const(2)
+_IRQ_GATTS_WRITE = const(3)
+
+_FLAG_READ = const(0x0002)
+_FLAG_WRITE_NO_RESPONSE = const(0x0004)
+_FLAG_WRITE = const(0x0008)
+_FLAG_NOTIFY = const(0x0010)
+
+_UART_UUID = bluetooth.UUID("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
+_UART_TX = (
+    bluetooth.UUID("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"),
+    _FLAG_READ | _FLAG_NOTIFY,
+)
+_UART_RX = (
+    bluetooth.UUID("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"),
+    _FLAG_WRITE | _FLAG_WRITE_NO_RESPONSE,
+)
+_UART_SERVICE = (
+    _UART_UUID,
+    (_UART_TX, _UART_RX),
+)
+
+
+class BLESimplePeripheral:
+    def __init__(self, ble, name="mpy-uart"):
+        self._ble = ble
+        self._ble.active(True)
+        self._ble.irq(self._irq)
+        ((self._handle_tx, self._handle_rx),) = self._ble.gatts_register_services((_UART_SERVICE,))
+        self._connections = set()
+        self._write_callback = None
+        self._payload = advertising_payload(name=name, services=[_UART_UUID])
+        self._advertise()
+
+    def _irq(self, event, data):
+        # Track connections so we can send notifications.
+        if event == _IRQ_CENTRAL_CONNECT:
+            conn_handle, _, _ = data
+            print("New connection", conn_handle)
+            self._connections.add(conn_handle)
+        elif event == _IRQ_CENTRAL_DISCONNECT:
+            conn_handle, _, _ = data
+            print("Disconnected", conn_handle)
+            self._connections.remove(conn_handle)
+            # Start advertising again to allow a new connection.
+            self._advertise()
+        elif event == _IRQ_GATTS_WRITE:
+            conn_handle, value_handle = data
+            value = self._ble.gatts_read(value_handle)
+            if value_handle == self._handle_rx and self._write_callback:
+                self._write_callback(value)
+
+    def send(self, data):
+        for conn_handle in self._connections:
+            self._ble.gatts_notify(conn_handle, self._handle_tx, data)
+
+    def is_connected(self):
+        return len(self._connections) > 0
+
+    def _advertise(self, interval_us=500000):
+        print("Starting advertising")
+        self._ble.gap_advertise(interval_us, adv_data=self._payload, resp_data=None, connectable=True)
+        time.sleep(10)  # Stop advertising after 10 seconds
+        self._ble.gap_advertise(None)  # Stop advertising
+        time.sleep(5)  # Wait for 5 seconds before re-advertising
+        self._ble.gap_advertise(interval_us, adv_data=self._payload, resp_data=None, connectable=True)  # Restart advertising
+
+    def on_write(self, callback):
+        self._write_callback = callback
+
 
 # PIO program to wait for a pin change
 @rp2.asm_pio()
@@ -33,7 +111,7 @@ def handler(sm):
     # read the state of both pins
     state = (pin1.value() << 1) | pin2.value()
     if p.is_connected():
-        print(f"{state=:02b}")
+        print(f"TX {state:02b}")
         p.send(bytes([state]))
     else:
         print(f"nc {state=:02b}")
@@ -41,7 +119,7 @@ def handler(sm):
 def sender():
     global p
     ble = bluetooth.BLE()
-    p = ble_simple_peripheral.BLESimplePeripheral(ble)
+    p = BLESimplePeripheral(ble)
 
     # instantiate a StateMachine with wait_pin_change program on each pin
     sm0 = rp2.StateMachine(0, wait_pin_change, in_base=pin1)
